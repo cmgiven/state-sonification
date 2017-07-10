@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+body { background: black; }
+</style>
+<body>
+<script src="//d3js.org/d3.v4.min.js"></script>
+<script src="//cdnjs.cloudflare.com/ajax/libs/howler/2.0.4/howler.core.min.js"></script>
+<script>
+initialize()
+
+function initialize(error, data) {
+    if (error) { throw error }
+
+    data = [
+        {
+            state: 'dc',
+            rates: [
+                { cat: 'birth', n: 10000 },
+                { cat: 'death', n: 5000 },
+                { cat: 'arrival', n: 32000 },
+                { cat: 'departure', n: 32000 }
+            ]
+        }
+    ]
+
+    var width = window.innerWidth
+    var height = window.innerHeight
+    var bpm = 140
+    var timeSignature = 4
+    var measuresPerMinute = bpm / timeSignature
+    var notes = [1, 1/2, 1/4, 1/8, 1/12, 1/16]
+    var possibleMinutesPerYear = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300, 360, 480, 600]
+
+    var hits = []
+    var probs = []
+
+    notes
+        .map(function (a) { return a * timeSignature })
+        .forEach(function (a) {
+            var i = 0
+
+            while (i < timeSignature) {
+                idx = hits.indexOf(i)
+
+                if (idx === -1) {
+                    idx = hits.length
+                    hits[idx] = i
+                    probs[idx] = 0
+                }
+
+                probs[idx] += 1
+                i += a
+            }
+        })
+
+    var probSum = probs.reduce(function (acc, a) { return acc + a })
+    probs = probs.map(function (a) { return a / probSum })
+
+    var arr2d = hits.map(function (a, i) { return [a, probs[i]] })
+    arr2d.sort(function (a, b) { return a[0] - b[0] })
+
+    hits = arr2d.map(function (a) { return a[0] })
+    probs = arr2d.map(function (a) { return a[1] })
+
+    var maxSupportedHitsPerMeasure = Math.floor(1 / probs[0]) - 1
+
+    data = data.map(function (d) {
+        var maxN = d3.max(d.rates, function (e) { return e.n })
+        d.minutesPerYear = possibleMinutesPerYear.map(function (minutesPerYear) {
+            var nPerMeasure = maxN / (measuresPerMinute * minutesPerYear)
+            if (nPerMeasure < maxSupportedHitsPerMeasure) { return minutesPerYear }
+        }).filter(function (e) { return e })[0]
+
+        d.rates = d.rates.map(function (e) {
+            var nPerMeasure = e.n / (measuresPerMinute * d.minutesPerYear)
+            e.probs = probs.map(function (a) { return a * nPerMeasure })
+
+            while (d3.max(e.probs) > 1) {
+                var rem = 0
+                var unmaxed = e.probs.length
+
+                e.probs = e.probs.map(function (f) {
+                    if (f >= 1) {
+                        rem += f - 1
+                        unmaxed -= 1
+                        return 1
+                    }
+                    return f
+                })
+
+                if (unmaxed === 0) { break }
+
+                var perUnmaxed = rem / unmaxed
+
+                e.probs = e.probs.map(function (f) {
+                    if (f < 1) {
+                        return f + perUnmaxed
+                    }
+                    return f
+                })
+            }
+
+            return e
+        })
+
+        return d
+    })
+
+    var x = function (cat) {
+        var paneWidth = width / 2
+        var offset = (cat === 'death' || cat === 'departure' ? 1 : 0) * paneWidth
+
+        return offset + paneWidth * Math.random()
+    }
+
+    var y = function (cat) {
+        var paneHeight = height / 2
+        var offset = (cat === 'arrival' || cat === 'departure' ? 1 : 0) * paneHeight
+
+        return offset + paneHeight * Math.random()
+    }
+
+    var color = d3.scaleOrdinal(d3.schemeCategory10).domain(['arrival', 'departure', 'birth', 'death'])
+
+    var svg = d3.select('body')
+        .append('svg')
+        .attr('width', width)
+        .attr('height', height)
+
+    var sound = new Howl({
+        src: ['sounds/notes.mp3', 'sounds/notes.ogg'],
+        sprite: {
+            death: [0, 500],
+            birth: [500, 500],
+            arrival: [1000, 500],
+            departure: [1500, 500]
+        }
+    })
+
+    console.log(data)
+
+    loop(0)
+
+    function loop(i) {
+        function hit(d) {
+            if (Math.random() <= d.probs[i]) {
+                sound.play(d.cat)
+                svg.append('circle')
+                    .attr('cx', function () { return x(d.cat) })
+                    .attr('cy', function () { return y(d.cat) })
+                    .attr('fill', function () { return color(d.cat) })
+                    .attr('opacity', 1)
+                    .attr('r', 1)
+                    .transition()
+                    .duration(1 / (bpm / 60) * timeSignature * 1000)
+                    .ease(d3.easeCubicOut)
+                    .attr('opacity', 0)
+                    .attr('r', 75)
+                    .remove()
+            }
+        }
+
+        data[0].rates.forEach(hit)
+
+        var next = (i + 1) % hits.length
+        var delay = ((hits[next] || timeSignature) - hits[i]) / (bpm / 60) * 1000
+        d3.timeout(function () { loop(next) }, delay)
+    }
+}
+</script>
+</body>
